@@ -1,0 +1,2 @@
+Copy GeoLite2-City.mmdb file to the current dir (about 61mb)
+visit https://github.com/P3TERX/GeoLite.mmdb

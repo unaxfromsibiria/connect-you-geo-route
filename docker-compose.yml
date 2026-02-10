@@ -1,0 +1,38 @@
+services:
+  connection-route:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: "host"
+    environment:
+      TCP_SOCKET_LISTEN: "0.0.0.0:8080"
+      RUST_LOG: "info"
+      GEOIP_DB_PATH: "/usr/src/connection-service/data/GeoLite2-City.mmdb"
+      CITY_LIST: "Dublin;London"
+      IP_WHITE_LIST: "127.0.0.1;10.5.5.1"
+      TCP_SOCKET_GUEST: "10.5.5.20:80"
+      TCP_SOCKET_TARGET: "10.5.5.13:80"
+    restart: unless-stopped
+
+  nginx-default:
+    image: nginx
+    restart: unless-stopped
+    networks:
+      private_net:
+        ipv4_address: 10.5.5.20
+
+  your-api-service:
+    # your service should be available from Dublin and London (CITY_LIST above)
+    # in other places the nginx welcome page will show
+    .......
+    restart: unless-stopped
+    networks:
+      private_net:
+        ipv4_address: 10.5.5.13
+
+networks:
+  private_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.5.5.0/24
