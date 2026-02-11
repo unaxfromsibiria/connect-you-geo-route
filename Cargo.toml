@@ -1,10 +1,11 @@
 [package]
 name = "connect-you-geo"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [dependencies]
 tokio = { version = "~1.49.0", features = ["full"] }
 maxminddb = { version = "~0.27" }
 log = { version = "~0.4", features = ["std", "serde"] }
-env_logger = { version = "~0.11"}
+env_logger = { version = "~0.11" }
+ipnetwork = { version = "~0.21" }

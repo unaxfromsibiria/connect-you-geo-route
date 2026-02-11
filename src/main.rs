@@ -8,6 +8,7 @@ use maxminddb::{geoip2, Reader};
 use std::net::IpAddr;
 use tokio::io::copy_bidirectional_with_sizes;
 use log::{info, warn, error};
+use ipnetwork::IpNetwork; 
 
 // env variables
 const ENV_SOCKET_LISTEN: &str = "TCP_SOCKET_LISTEN";  // value eg: 0.0.0.0:7000
@@ -18,6 +19,8 @@ const ENV_BUFFER_SIZE: &str = "BUFFER_SIZE";
 const ENV_STAT_SHOW_INTERVAL: &str = "STAT_SHOW_INTERVAL";
 const ENV_GEOIP_DB: &str = "GEOIP_DB_PATH";
 const ENV_CITY_LIST: &str = "CITY_LIST";  // value eg: London;Rome;Beijing
+const ENV_CHECK_IP: &str = "CHECK_IP";
+const ENV_SUBNETS: &str = "WHITE_SUBNETS"; // value eg: 10.10.1.0/24 10.10.0.0/16
 
 #[derive(Clone)]
 struct Settings {
@@ -29,11 +32,14 @@ struct Settings {
     buffer_size: usize,
     stat_delay: usize,
     file_path_mmdb: String,
+    check_ip_list: Vec<String>,
+    subnets: Vec<String>,
 }
 
 trait DataValidator {
     fn is_allowed(&self, ip: &str) -> bool;
     fn is_city_allowed(&self, ip: &str, db: &Reader<Vec<u8>>) -> bool;
+    fn in_subnet(&self, ip: &str) -> bool;
 }
 
 impl DataValidator for Settings {
@@ -71,6 +77,21 @@ impl DataValidator for Settings {
             },
             Err(_) => false,
         }
+    }
+
+    fn in_subnet(&self, ip: &str) -> bool {
+        let ip_addr = match ip.parse::<IpAddr>() {
+            Ok(addr) => addr,
+            Err(_) => return false,
+        };
+        for subnet_str in self.subnets.iter() {
+            if let Ok(subnet) = subnet_str.parse::<IpNetwork>() {
+                if subnet.contains(ip_addr) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -195,6 +216,22 @@ fn create_settings() -> Settings {
         |s| s.trim().to_string().to_lowercase()
     ).filter(|s| !s.is_empty()).collect();
 
+    let ip_list = match env::var(ENV_CHECK_IP) {
+        Ok(val) => val,
+        Err(_) => "".to_string(),
+    };
+    let check_ip_list: Vec<String> = ip_list.split(';').map(
+        |s| s.trim().to_string()
+    ).filter(|s| !s.is_empty() && _validate_id(s)).collect();
+
+    let str_list = match env::var(ENV_SUBNETS) {
+        Ok(val) => val,
+        Err(_) => "".to_string(),
+    };
+    let subnets: Vec<String> = str_list.split(';').map(
+        |s| s.trim().to_string()
+    ).filter(|s| !s.is_empty()).collect();
+
     Settings {
         cities,
         ip_addresses,
@@ -204,6 +241,8 @@ fn create_settings() -> Settings {
         buffer_size,
         stat_delay,
         file_path_mmdb,
+        check_ip_list,
+        subnets,
     }
 }
 
@@ -251,6 +290,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ip_cache: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
     let settings = create_settings();
     let reader = Reader::open_readfile(&settings.file_path_mmdb)?;
+    if settings.check_ip_list.len() > 0 {
+        for ip_a in &settings.check_ip_list {
+            let ip_ad: IpAddr = ip_a.parse()?;
+            let result = reader.lookup(ip_ad)?;
+            if let Some(city) = result.decode::<geoip2::City>()? {
+                info!("Ip {} country: {} city: {}", ip_a, city.country.iso_code.unwrap_or("N/A"), city.city.names.english.unwrap_or("N/A"));
+            }
+        }
+    }
     let reader_arc = Arc::new(Mutex::new(reader));
     let listener = match settings.listen_socket.clone() {
         Some((ip, port)) => TcpListener::bind(format!("{}:{}", ip, port)).await?,
@@ -271,7 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Ip {} from a cache", ip);
                 cached_value
             } else {
-                let mut allowed = local_settings.is_allowed(&ip);
+                let mut allowed = local_settings.is_allowed(&ip) || local_settings.in_subnet(&ip);
                 if !allowed {
                     let reader_guard = reader_arc.lock().await;
                     allowed = local_settings.is_city_allowed(&ip, &reader_guard);
