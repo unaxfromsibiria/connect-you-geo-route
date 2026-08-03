@@ -1,3 +1,4 @@
 /target
 back/*
 .vscode
+data/*.mmdb

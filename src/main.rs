@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use maxminddb::{geoip2, Reader};
 use std::net::IpAddr;
 use tokio::io::copy_bidirectional_with_sizes;
-use log::{info, warn, error};
+use log::{info, warn, error, debug};
 use ipnetwork::IpNetwork; 
 
 // env variables
@@ -358,7 +358,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ).await;
             match result {
                 Ok((to_server, from_server)) => {
-                    info!("Bytes sent from {}: {}, received: {}", ip, to_server, from_server);
+                    debug!("Bytes sent from {}: {}, received: {}", ip, to_server, from_server);
                     let (traffic_in_key, traffic_out_key) = (format!("{}_in", ip), format!("{}_out", ip));
                     let mut traffic_guard = traffic_arc.lock().await;
                     *traffic_guard.entry(traffic_in_key.clone()).or_insert(0) += to_server;
@@ -372,4 +372,124 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_port_valid() {
+        assert!(_validate_port(80));
+        assert!(_validate_port(443));
+        assert!(_validate_port(65535));
+    }
+
+    #[test]
+    fn test_validate_port_invalid() {
+        assert!(!_validate_port(0));
+        assert!(!_validate_port(65536));
+    }
+
+    #[test]
+    fn test_validate_id_valid() {
+        assert!(_validate_id("127.0.0.1"));
+        assert!(_validate_id("192.168.1.1"));
+        assert!(_validate_id("10.0.0.1"));
+    }
+
+    #[test]
+    fn test_validate_id_invalid() {
+        assert!(!_validate_id("256.1.1.1")); // Octet > 255
+        assert!(!_validate_id("1.1.1"));     // Too few parts
+        assert!(!_validate_id("1.1.1.1.1")); // Too many parts
+        assert!(!_validate_id("abc.def.ghi.jkl")); // Non-numeric
+    }
+
+    #[test]
+    fn test_validate_socket_valid() {
+        let result = _validate_socket("127.0.0.1:80");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), ("127.0.0.1".to_string(), 80));
+    }
+
+    #[test]
+    fn test_validate_socket_invalid() {
+        assert!(_validate_socket("invalid").is_none());
+        assert!(_validate_socket("127.0.0.1:abc").is_none());
+        assert!(_validate_socket("127.0.0.1:99999").is_none()); // Port too high
+    }
+
+    #[test]
+    fn test_settings_is_allowed() {
+        let settings = Settings {
+            ip_addresses: vec!["127.0.0.1".to_string(), "192.168.1.5".to_string()],
+            cities: vec![],
+            listen_socket: None,
+            target_socket: None,
+            guest_socket: None,
+            buffer_size: 1024,
+            stat_delay: 60,
+            file_path_mmdb: "".to_string(),
+            check_ip_list: vec![],
+            subnets: vec![],
+        };
+
+        assert!(settings.is_allowed("127.0.0.1"));
+        assert!(settings.is_allowed("192.168.1.5"));
+        assert!(!settings.is_allowed("10.0.0.1"));
+    }
+
+    #[test]
+    fn test_settings_in_subnet() {
+        let settings = Settings {
+            ip_addresses: vec![],
+            cities: vec![],
+            listen_socket: None,
+            target_socket: None,
+            guest_socket: None,
+            buffer_size: 1024,
+            stat_delay: 60,
+            file_path_mmdb: "".to_string(),
+            check_ip_list: vec![],
+            subnets: vec![
+                "192.168.1.0/24".to_string(), 
+                "10.0.0.0/8".to_string()
+            ],
+        };
+
+        assert!(settings.in_subnet("192.168.1.1"));
+        assert!(settings.in_subnet("192.168.1.254"));
+        assert!(!settings.in_subnet("192.168.2.1")); // Outside /24
+        
+        assert!(settings.in_subnet("10.255.255.255"));
+        assert!(!settings.in_subnet("172.16.0.1")); // Not in 10.x or 192.168.1.x
+    }
+
+    #[test]
+    fn test_settings_is_city_allowed() {
+
+        let db = match Reader::open_readfile("data/GeoLite2-City.mmdb") {
+            Ok(r) => r,
+            Err(_) => {
+                warn!("Skipping city test due to missing DB");
+                return; 
+            }
+        };
+
+        let settings = Settings {
+            ip_addresses: vec![],
+            cities: vec!["london".to_string(), "rome".to_string()],
+            listen_socket: None,
+            target_socket: None,
+            guest_socket: None,
+            buffer_size: 1024,
+            stat_delay: 60,
+            file_path_mmdb: "".to_string(),
+            check_ip_list: vec![],
+            subnets: vec![],
+        };
+
+        assert!(!settings.is_city_allowed("8.8.8.8", &db));
+    }
 }
