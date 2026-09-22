@@ -1,4 +1,4 @@
-FROM rust:1.95 AS builder
+FROM rust:1.97 AS builder
 WORKDIR /usr/src/connection-service
 COPY . .
 RUN cargo build --release --locked
